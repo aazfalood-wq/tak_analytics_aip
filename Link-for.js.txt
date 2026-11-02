@@ -1,0 +1,2 @@
+<!-- ضع هذا السكريبت في موقعك -->
+<script src="path/to/tracker.js" async></script>
