@@ -10,7 +10,7 @@ app.use(cors());
 let visitsLog = [];
 let totalVisitsCount = 0;
 
-// دالة بسيطة لتحليل نوع الجهاز والمتصفح من الـ User-Agent
+// دالة لتحليل نوع الجهاز والمتصفح من الـ User-Agent
 function parseUserAgent(ua = '') {
     let device = 'Desktop';
     if (/mobile/i.test(ua)) device = 'Mobile';
@@ -29,12 +29,19 @@ function parseUserAgent(ua = '') {
 app.post('/api/track', (req, res) => {
     const { pageUrl, referrer } = req.body;
     
-    // استخراج عنوان الـ IP الحقيقي للزائر
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+    // التقاط الـ IP الحقيقي بدقة مع مراعاة بروكسي Render
+    let rawIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
+    const ip = rawIp.includes(',') ? rawIp.split(',')[0].trim() : rawIp;
     
+    // تنظيف عنوان الـ IP إذا كان بصيغة IPv6 محلية
+    const cleanIp = ip.includes('::1') ? '127.0.0.1' : ip;
+
     // جلب معلومات الموقع الجغرافي (المدينة والدولة)
-    const geo = geoip.lookup(ip) || { city: 'Unknown City', country: 'XX' };
-    const location = `${geo.city !== '' ? geo.city : 'Unknown City'}, ${geo.country}`;
+    const geo = geoip.lookup(cleanIp) || { city: 'Unknown City', country: 'XX' };
+    
+    const cityName = geo.city ? geo.city : 'Unknown City';
+    const countryName = geo.country ? geo.country : 'XX';
+    const location = `${cityName}, ${countryName}`;
 
     // تحليل الجهاز والمتصفح
     const uaString = req.headers['user-agent'] || '';
@@ -44,10 +51,10 @@ app.post('/api/track', (req, res) => {
     
     const visitRecord = {
         id: Date.now(),
-        ip: ip.includes('::1') ? '127.0.0.1' : ip,
+        ip: cleanIp,
         pageUrl: pageUrl || 'Unknown Page',
         referrer: referrer || 'Direct',
-        location: location, // المدينة والدولة
+        location: location, // المدينة والدولة بشكل صحيح
         device: deviceInfo.device,
         browser: deviceInfo.browser,
         timestamp: new Date().toLocaleTimeString(),
@@ -71,7 +78,6 @@ app.get('/api/stats', (req, res) => {
     const ACTIVE_THRESHOLD = 5 * 60 * 1000; // 5 دقائق تعتبر الزائر متواجداً حالياً
 
     // حساب عدد المتواجدين حالياً بناءً على آخر نشاط
-    // نفرض أن كل سجل حديث يمثل نشاطاً، أو نقوم بتصفية حسب الـ IP والوقت
     const activeIps = new Set();
     visitsLog.forEach(visit => {
         if (now - visit.lastActive < ACTIVE_THRESHOLD) {
