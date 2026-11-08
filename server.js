@@ -1,98 +1,61 @@
 const express = require('express');
 const cors = require('cors');
-const geoip = require('geoip-lite');
-
 const app = express();
+
 app.use(express.json());
 app.use(cors());
 
-// تخزين الزيارات والنشاط
-let visitsLog = [];
-let totalVisitsCount = 0;
+// تخزين البيانات في الذاكرة المؤقتة للسيرفر
+let totalVisits = 0;
+let activeUsersNow = 1;
+let recentVisits = [];
 
-// دالة لتحليل نوع الجهاز والمتصفح من الـ User-Agent
-function parseUserAgent(ua = '') {
-    let device = 'Desktop';
-    if (/mobile/i.test(ua)) device = 'Mobile';
-    else if (/tablet/i.test(ua)) device = 'Tablet';
-
-    let browser = 'Unknown Browser';
-    if (/chrome/i.test(ua) && !/edge/i.test(ua)) browser = 'Chrome';
-    else if (/safari/i.test(ua) && !/chrome/i.test(ua)) browser = 'Safari';
-    else if (/firefox/i.test(ua)) browser = 'Firefox';
-    else if (/edge/i.test(ua)) browser = 'Edge';
-
-    return { device, browser };
-}
-
-// 1. مسار تسجيل الزيارات (يتم استدعاؤه من موقعك عبر tracker.js)
+// 1. استقبال بيانات الزيارة الجديدة (بما فيها مسار الصفحة URL)
 app.post('/api/track', (req, res) => {
-    const { pageUrl, referrer } = req.body;
+    const pageUrl = req.body.pageUrl || 'الصفحة الرئيسية';
+    const userAgent = req.get('User-Agent') || 'Unknown';
     
-    // التقاط الـ IP الحقيقي بدقة مع مراعاة بروكسي Render
-    let rawIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '127.0.0.1';
-    const ip = rawIp.includes(',') ? rawIp.split(',')[0].trim() : rawIp;
+    // تحديد نوع الجهاز بذكاء من الـ User-Agent
+    const isMobile = /mobile|android|iphone|ipad/i.test(userAgent);
+    const deviceType = isMobile ? 'Mobile' : 'Desktop';
     
-    // تنظيف عنوان الـ IP إذا كان بصيغة IPv6 محلية
-    const cleanIp = ip.includes('::1') ? '127.0.0.1' : ip;
+    // استخراج اسم المتصفح بشكل مبسط
+    let browserName = 'Browser';
+    if (userAgent.includes('Chrome')) browserName = 'Chrome';
+    else if (userAgent.includes('Firefox')) browserName = 'Firefox';
+    else if (userAgent.includes('Safari')) browserName = 'Safari';
+    else if (userAgent.includes('Edge')) browserName = 'Edge';
 
-    // جلب معلومات الموقع الجغرافي (المدينة والدولة)
-    const geo = geoip.lookup(cleanIp) || { city: 'Unknown City', country: 'XX' };
-    
-    const cityName = geo.city ? geo.city : 'Unknown City';
-    const countryName = geo.country ? geo.country : 'XX';
-    const location = `${cityName}, ${countryName}`;
+    totalVisits++;
 
-    // تحليل الجهاز والمتصفح
-    const uaString = req.headers['user-agent'] || '';
-    const deviceInfo = parseUserAgent(uaString);
-
-    totalVisitsCount++;
-    
-    const visitRecord = {
-        id: Date.now(),
-        ip: cleanIp,
-        pageUrl: pageUrl || 'Unknown Page',
-        referrer: referrer || 'Direct',
-        location: location, // المدينة والدولة بشكل صحيح
-        device: deviceInfo.device,
-        browser: deviceInfo.browser,
-        timestamp: new Date().toLocaleTimeString(),
-        lastActive: Date.now() // لتحديد المتواجدين حالياً
+    const newVisit = {
+        pageUrl: pageUrl,
+        device: deviceType,
+        browser: browserName,
+        location: 'المملكة العربية السعودية',
+        ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'Local',
+        timestamp: new Date().toISOString() // توقيت السيرفر UTC
     };
 
-    // إضافة الزيارة في بداية القائمة
-    visitsLog.unshift(visitRecord);
-    
-    // الاحتفاظ بآخر 100 زيارة فقط في الذاكرة لتخفيف الضغط
-    if (visitsLog.length > 100) {
-        visitsLog.pop();
+    // إضافة الزيارة الجديدة في مقدمة القائمة والاحتفاظ بآخر 15 زيارة فقط
+    recentVisits.unshift(newVisit);
+    if (recentVisits.length > 15) {
+        recentVisits.pop();
     }
 
-    res.status(200).json({ success: true, message: 'Visit recorded successfully' });
+    res.status(200).json({ success: true, totalVisits });
 });
 
-// 2. مسار إرجاع الإحصائيات لتطبيق Flutter
+// 2. تزويد التطبيق ولوحة الكمبيوتر بالإحصائيات الحالية
 app.get('/api/stats', (req, res) => {
-    const now = Date.now();
-    const ACTIVE_THRESHOLD = 5 * 60 * 1000; // 5 دقائق تعتبر الزائر متواجداً حالياً
-
-    // حساب عدد المتواجدين حالياً بناءً على آخر نشاط
-    const activeIps = new Set();
-    visitsLog.forEach(visit => {
-        if (now - visit.lastActive < ACTIVE_THRESHOLD) {
-            activeIps.add(visit.ip);
-        }
-    });
-
     res.json({
-        totalVisits: totalVisitsCount,
-        activeUsersNow: activeIps.size, // عدد الموجودين حالياً
-        recentVisits: visitsLog
+        totalVisits: totalVisits,
+        activeUsersNow: activeUsersNow,
+        recentVisits: recentVisits
     });
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`🚀 Advanced Tracker API is running on port ${PORT}`);
+    console.log(`TAK Analytics Server running on port ${PORT}`);
 });
