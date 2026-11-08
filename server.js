@@ -1,30 +1,48 @@
 const express = require('express');
 const cors = require('cors');
+const axios = require('axios'); // تأكد أنك مبيت مكتبة axios أو استخدم fetch المدمجة في نود
 const app = express();
 
 app.use(express.json());
 app.use(cors());
 
-// تخزين البيانات في الذاكرة المؤقتة للسيرفر
 let totalVisits = 0;
 let activeUsersNow = 1;
 let recentVisits = [];
 
-// 1. استقبال بيانات الزيارة الجديدة (بما فيها مسار الصفحة URL)
-app.post('/api/track', (req, res) => {
+app.post('/api/track', async (req, res) => {
     const pageUrl = req.body.pageUrl || 'الصفحة الرئيسية';
     const userAgent = req.get('User-Agent') || 'Unknown';
     
-    // تحديد نوع الجهاز بذكاء من الـ User-Agent
     const isMobile = /mobile|android|iphone|ipad/i.test(userAgent);
     const deviceType = isMobile ? 'Mobile' : 'Desktop';
     
-    // استخراج اسم المتصفح بشكل مبسط
     let browserName = 'Browser';
     if (userAgent.includes('Chrome')) browserName = 'Chrome';
     else if (userAgent.includes('Firefox')) browserName = 'Firefox';
     else if (userAgent.includes('Safari')) browserName = 'Safari';
     else if (userAgent.includes('Edge')) browserName = 'Edge';
+
+    // استخراج الـ IP الحقيقي للزائر
+    let clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
+    if (clientIp.includes(',')) clientIp = clientIp.split(',')[0].trim();
+    if (clientIp === '::1' || clientIp === '127.0.0.1') clientIp = ''; // للإيثار محلياً
+
+    let locationStr = 'المملكة العربية السعودية';
+    
+    // جلب الدولة والمدينة الحقيقية عبر الـ IP (إذا لم يكن محلياً)
+    if (clientIp) {
+        try {
+            const geoRes = await axios.get(`http://ip-api.com/json/${clientIp}?fields=status,country,city`);
+            if (geoRes.data && geoRes.data.status === 'success') {
+                const country = geoRes.data.country || 'المملكة العربية السعودية';
+                const city = geoRes.data.city || 'الرياض';
+                locationStr = `${country} - ${city}`;
+            }
+        } catch (err) {
+            console.log('Geo fetch error:', err.message);
+        }
+    }
 
     totalVisits++;
 
@@ -32,12 +50,11 @@ app.post('/api/track', (req, res) => {
         pageUrl: pageUrl,
         device: deviceType,
         browser: browserName,
-        location: 'المملكة العربية السعودية',
-        ip: req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'Local',
-        timestamp: new Date().toISOString() // توقيت السيرفر UTC
+        location: locationStr, // سيحفظ (الدولة - المدينة)
+        ip: clientIp || 'Local',
+        timestamp: new Date().toISOString()
     };
 
-    // إضافة الزيارة الجديدة في مقدمة القائمة والاحتفاظ بآخر 15 زيارة فقط
     recentVisits.unshift(newVisit);
     if (recentVisits.length > 15) {
         recentVisits.pop();
@@ -46,7 +63,6 @@ app.post('/api/track', (req, res) => {
     res.status(200).json({ success: true, totalVisits });
 });
 
-// 2. تزويد التطبيق ولوحة الكمبيوتر بالإحصائيات الحالية
 app.get('/api/stats', (req, res) => {
     res.json({
         totalVisits: totalVisits,
