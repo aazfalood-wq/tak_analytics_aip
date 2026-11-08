@@ -1,9 +1,9 @@
 const express = require('express');
 const cors = require('cors');
-const axios = require('axios');
+const geoip = require('geoip-lite'); // استدعاء المكتبة المحلية الموجودة في مشروعك
 const app = express();
 
-// هامة جداً لكي يتعرف السيرفر على الـ IP الحقيقي للزائر عند استضافته على الإنترنت
+// لتحديد الـ IP الحقيقي بدقة خلف الاستضافات والبروكسي
 app.set('trust proxy', true);
 
 app.use(express.json());
@@ -13,7 +13,7 @@ let totalVisits = 0;
 let activeUsersNow = 1;
 let recentVisits = [];
 
-app.post('/api/track', async (req, res) => {
+app.post('/api/track', (req, res) => {
     const pageUrl = req.body.pageUrl || 'الصفحة الرئيسية';
     const userAgent = req.get('User-Agent') || 'Unknown';
     
@@ -23,35 +23,40 @@ app.post('/api/track', async (req, res) => {
     let browserName = 'Browser';
     if (userAgent.includes('Chrome')) browserName = 'Chrome';
     else if (userAgent.includes('Firefox')) browserName = 'Firefox';
-    else if (userAgent.includes('Safari')) browserName.includes('Safari'); // تم تصحيحها للتحقق السليم
+    else if (userAgent.includes('Safari')) browserName = 'Safari';
     else if (userAgent.includes('Edge')) browserName = 'Edge';
 
-    // استخراج الـ IP الحقيقي للزائر بدقة
-    let clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress || '';
-    if (clientIp.includes(',')) clientIp = clientIp.split(',')[0].trim();
-    
-    // تنظيف صيغة الـ IPv6 لو كانت مرتبطة بـ IPv4 مثل ::ffff:192.168.1.1
+    // استخراج الـ IP الحقيقي للزائر
+    let clientIp = req.headers['x-client-ip'] || 
+                   req.headers['x-real-ip'] || 
+                   req.headers['cf-connecting-ip'] || '';
+                   
+    if (!clientIp) {
+        const xForwarded = req.headers['x-forwarded-for'];
+        if (xForwarded) {
+            clientIp = xForwarded.split(',')[0].trim();
+        } else {
+            clientIp = req.socket.remoteAddress || '';
+        }
+    }
+
     if (clientIp.startsWith('::ffff:')) {
         clientIp = clientIp.replace('::ffff:', '');
     }
 
-    let locationStr = 'المملكة العربية السعودية - الرياض'; // قيمة افتراضية في حال الفشل
-    
-    // جلب الدولة والمدينة الحقيقية عبر الـ IP
-    // ملاحظة: للاختبار محلياً (localhost)، يمكنك وضع IP حقيقي مؤقتاً للتأكد مثل '8.8.8.8'
+    let locationStr = 'المملكة العربية السعودية';
+
+    // فحص الـ IP عبر مكتبة geoip-lite المحلية
     if (clientIp && clientIp !== '::1' && clientIp !== '127.0.0.1') {
-        try {
-            const geoRes = await axios.get(`http://ip-api.com/json/${clientIp}?fields=status,country,city,query`);
-            if (geoRes.data && geoRes.data.status === 'success') {
-                const country = geoRes.data.country || 'المملكة العربية السعودية';
-                const city = geoRes.data.city || 'الرياض';
-                locationStr = `${country} - ${city}`;
-            }
-        } catch (err) {
-            console.log('Geo fetch error:', err.message);
+        const geo = geoip.lookup(clientIp);
+        if (geo) {
+            // geo.country يعطي رمز الدولة (مثل SA)، و geo.city يعطي المدينة
+            const country = geo.country ? geo.country : 'المملكة العربية السعودية';
+            const city = geo.city ? geo.city : '';
+            
+            locationStr = city ? `${country} - ${city}` : country;
         }
     } else {
-        // اختبار محلي افتراضي للتأكد أن الكود يعمل
         locationStr = 'المملكة العربية السعودية - الرياض (محلي)';
     }
 
